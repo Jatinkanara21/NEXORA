@@ -1,0 +1,2 @@
+# NEXORA intentionally uses Python standard library only.
+# Python 3.11+
