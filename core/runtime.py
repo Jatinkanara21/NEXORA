@@ -297,8 +297,40 @@ class Runtime:
         self.blackboard.add_event("artifact_created", {"task_id": task_id, "artifact_id": artifact.id, "kind": artifact.kind})
         self.experience.add({"agent": agent.name, "intent": task_record["intent"], "success": True, "node": node.id, "latency_ms": 0})
 
-    def execute(self, task: str) -> dict[str, Any]:
+    def create_task(self, task: str) -> str:
+        """Queue a task for background execution and return its stable task id."""
         task_id = str(uuid.uuid4())
+        with self._lock:
+            self.tasks[task_id] = {
+                "task_id": task_id,
+                "task": task,
+                "status": "queued",
+                "created_at": _now(),
+            }
+        worker = threading.Thread(
+            target=self._execute_task_record,
+            args=(task_id, task),
+            daemon=True,
+            name=f"nexora-task-{task_id[:8]}",
+        )
+        worker.start()
+        return task_id
+
+    def _execute_task_record(self, task_id: str, task: str) -> None:
+        try:
+            self.execute(task, task_id=task_id)
+        except Exception as exc:
+            with self._lock:
+                record = self.tasks.setdefault(task_id, {"task_id": task_id, "task": task})
+                record.update({
+                    "status": "failed",
+                    "error": str(exc),
+                    "finished_at": _now(),
+                })
+            self.blackboard.add_error({"task_id": task_id, "error": str(exc)})
+
+    def execute(self, task: str, task_id: str | None = None) -> dict[str, Any]:
+        task_id = task_id or str(uuid.uuid4())
         intent_result = detect(task)
         intent = intent_result["intent"]
         operations = self._operations(task, intent)
